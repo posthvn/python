@@ -3,6 +3,11 @@ TASS Motion Analysis Visualization Module
 ==========================================
 
 Provides 2D and 3D visualization of towed array sonar system simulation results.
+
+Coordinate convention:
+  - X: forward (tow direction)
+  - Y: lateral (starboard positive)
+  - Z: depth (downward positive, Z=0 at tow point)
 """
 
 import numpy as np
@@ -18,11 +23,7 @@ def plot_cable_3d(results: dict, time_indices: Optional[list] = None,
                   save_path: Optional[str] = None):
     """
     Plot 3D cable configurations at selected time steps.
-
-    Args:
-        results: simulation results dictionary
-        time_indices: list of time indices to plot (None = auto-select)
-        save_path: path to save figure (None = show)
+    Z+ = depth (downward). Tow point at origin.
     """
     fig = plt.figure(figsize=(14, 10))
     ax = fig.add_subplot(111, projection='3d')
@@ -41,27 +42,34 @@ def plot_cable_3d(results: dict, time_indices: Optional[list] = None,
         pos = positions[idx]
         t = times[idx]
         color = cmap(norm(t))
-        ax.plot(pos[:, 0], pos[:, 1], pos[:, 2],
+        # Plot with -Z so depth appears downward visually in 3D
+        ax.plot(pos[:, 0], pos[:, 1], -pos[:, 2],
                 color=color, alpha=0.7, linewidth=1.5,
                 label=f't = {t:.0f} s')
-        # Mark tow point
-        ax.scatter(*pos[0], color=color, s=30, marker='o')
-        # Mark tail
-        ax.scatter(*pos[-1], color=color, s=20, marker='v')
+        ax.scatter(pos[0, 0], pos[0, 1], -pos[0, 2],
+                   color=color, s=30, marker='o')
+        ax.scatter(pos[-1, 0], pos[-1, 1], -pos[-1, 2],
+                   color=color, s=20, marker='v')
 
     # Plot tow point trajectory
     tow_pts = results['tow_points']
-    ax.plot(tow_pts[:, 0], tow_pts[:, 1], tow_pts[:, 2],
+    ax.plot(tow_pts[:, 0], tow_pts[:, 1], -tow_pts[:, 2],
             'r--', linewidth=2, label='Tow point path')
+
+    # Mark origin
+    ax.scatter(0, 0, 0, color='red', s=100, marker='*', zorder=10,
+               label='Origin (Tow Point t=0)')
 
     ax.set_xlabel('X [m] (Forward)')
     ax.set_ylabel('Y [m] (Lateral)')
-    ax.set_zlabel('Z [m] (Depth)')
+    ax.set_zlabel('Depth [m]')
     ax.set_title(title)
-    ax.legend(fontsize=8, loc='upper left')
+    ax.legend(fontsize=7, loc='upper left')
 
-    # Invert Z axis (depth increases downward)
-    ax.invert_zaxis()
+    # Set Z tick labels to show positive depth values
+    zticks = ax.get_zticks()
+    ax.set_zticks(zticks)
+    ax.set_zticklabels([f'{-z:.0f}' for z in zticks])
 
     plt.tight_layout()
     if save_path:
@@ -102,6 +110,9 @@ def plot_cable_xy(results: dict, time_indices: Optional[list] = None,
     ax.plot(tow_pts[:, 0], tow_pts[:, 1], 'r--', linewidth=2,
             label='Tow point path')
 
+    # Mark origin
+    ax.plot(0, 0, 'r*', markersize=15, label='Origin')
+
     ax.set_xlabel('X [m] (Forward)')
     ax.set_ylabel('Y [m] (Lateral)')
     ax.set_title(title)
@@ -121,7 +132,7 @@ def plot_cable_xy(results: dict, time_indices: Optional[list] = None,
 def plot_cable_xz(results: dict, time_indices: Optional[list] = None,
                   title: str = "TASS Cable Side View (X-Z)",
                   save_path: Optional[str] = None):
-    """Plot cable configuration in side view (X-Z plane)."""
+    """Plot cable configuration in side view (X-Z plane). Z+ = depth downward."""
     fig, ax = plt.subplots(figsize=(12, 6))
 
     positions = results['positions']
@@ -141,11 +152,14 @@ def plot_cable_xz(results: dict, time_indices: Optional[list] = None,
         ax.plot(pos[:, 0], pos[:, 2], color=color, linewidth=1.5,
                 label=f't = {t:.0f} s')
 
+    # Mark origin
+    ax.plot(0, 0, 'r*', markersize=15, label='Origin (Tow Point)')
+
     ax.set_xlabel('X [m] (Forward)')
-    ax.set_ylabel('Z [m] (Depth)')
+    ax.set_ylabel('Depth Z [m] (+ downward)')
     ax.set_title(title)
     ax.legend(fontsize=8)
-    ax.invert_yaxis()
+    ax.invert_yaxis()  # So depth increases downward visually
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -182,7 +196,7 @@ def plot_tension_distribution(results: dict, time_indices: Optional[list] = None
         color = cmap(norm(t))
         ax.plot(s, T, color=color, linewidth=1.5, label=f't = {t:.0f} s')
 
-    ax.set_xlabel('Arc Length s [m]')
+    ax.set_xlabel('Arc Length s [m] (from tow point)')
     ax.set_ylabel('Tension [N]')
     ax.set_title(title)
     ax.legend(fontsize=8)
@@ -252,6 +266,7 @@ def plot_tail_trajectory(results: dict,
     axes[0].plot(tow_pts[:, 0], tow_pts[:, 1], 'r--', linewidth=1.5,
                  label='Tow point')
     axes[0].plot(tail_x, tail_y, 'b-', linewidth=1.5, label='Array tail')
+    axes[0].plot(0, 0, 'r*', markersize=12, label='Origin')
     axes[0].set_xlabel('X [m]')
     axes[0].set_ylabel('Y [m]')
     axes[0].set_title('Plan View (X-Y)')
@@ -268,14 +283,13 @@ def plot_tail_trajectory(results: dict,
     axes[1].set_title('Tail Lateral Offset')
     axes[1].grid(True, alpha=0.3)
 
-    # Depth history
+    # Depth history (Z+ = depth)
     axes[2].plot(times, tail_z, 'b-', linewidth=1.5, label='Array tail')
     axes[2].plot(times, tow_pts[:, 2], 'r--', linewidth=1.5, label='Tow point')
     axes[2].set_xlabel('Time [s]')
-    axes[2].set_ylabel('Depth [m]')
+    axes[2].set_ylabel('Depth Z [m] (+ downward)')
     axes[2].set_title('Depth History')
     axes[2].legend()
-    axes[2].invert_yaxis()
     axes[2].grid(True, alpha=0.3)
 
     fig.suptitle(title, fontsize=14)
@@ -291,8 +305,11 @@ def plot_tail_trajectory(results: dict,
 def plot_quasi_static_results(qs_results: dict,
                                title: str = "Quasi-Static Steady-State Solution",
                                save_path: Optional[str] = None):
-    """Plot results from quasi-static analysis."""
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    """
+    Plot results from quasi-static analysis.
+    Tow point at origin (0,0,0). Z+ = depth (downward).
+    """
+    fig = plt.figure(figsize=(14, 10))
 
     pos = qs_results['positions']
     T = qs_results['tensions']
@@ -302,39 +319,47 @@ def plot_quasi_static_results(qs_results: dict,
 
     # 3D cable shape
     ax3d = fig.add_subplot(221, projection='3d')
-    ax3d.plot(pos[:, 0], pos[:, 1], pos[:, 2], 'b-', linewidth=2)
-    ax3d.scatter(*pos[0], color='red', s=100, marker='o', label='Tow point')
-    ax3d.scatter(*pos[-1], color='green', s=100, marker='v', label='Tail')
+    ax3d.plot(pos[:, 0], pos[:, 1], -pos[:, 2], 'b-', linewidth=2)
+    ax3d.scatter(pos[0, 0], pos[0, 1], -pos[0, 2],
+                 color='red', s=100, marker='*', label='Tow Point (0,0,0)')
+    ax3d.scatter(pos[-1, 0], pos[-1, 1], -pos[-1, 2],
+                 color='green', s=100, marker='v', label='Tail')
     ax3d.set_xlabel('X [m]')
     ax3d.set_ylabel('Y [m]')
-    ax3d.set_zlabel('Z [m]')
+    ax3d.set_zlabel('Depth [m]')
     ax3d.set_title('Cable Configuration')
-    ax3d.legend()
-    ax3d.invert_zaxis()
-
-    # Remove the flat subplot at position 221 (replaced by 3D)
-    axes[0, 0].remove()
+    ax3d.legend(fontsize=7)
+    # Z tick labels show positive depth
+    zticks = ax3d.get_zticks()
+    ax3d.set_zticklabels([f'{-z:.0f}' for z in zticks])
 
     # Tension distribution
-    axes[0, 1].plot(s, T, 'b-', linewidth=2)
-    axes[0, 1].set_xlabel('Arc Length s [m]')
-    axes[0, 1].set_ylabel('Tension [N]')
-    axes[0, 1].set_title('Tension Distribution')
-    axes[0, 1].grid(True, alpha=0.3)
+    ax_t = fig.add_subplot(222)
+    ax_t.plot(s, T, 'b-', linewidth=2)
+    ax_t.set_xlabel('Arc Length s [m]')
+    ax_t.set_ylabel('Tension [N]')
+    ax_t.set_title('Tension Distribution')
+    ax_t.grid(True, alpha=0.3)
 
     # Inclination angle
-    axes[1, 0].plot(s, phi, 'r-', linewidth=2)
-    axes[1, 0].set_xlabel('Arc Length s [m]')
-    axes[1, 0].set_ylabel('Inclination φ [deg]')
-    axes[1, 0].set_title('Inclination Angle')
-    axes[1, 0].grid(True, alpha=0.3)
+    ax_phi = fig.add_subplot(223)
+    ax_phi.plot(s, phi, 'r-', linewidth=2)
+    ax_phi.set_xlabel('Arc Length s [m]')
+    ax_phi.set_ylabel('Inclination φ [deg]')
+    ax_phi.set_title('Inclination Angle')
+    ax_phi.grid(True, alpha=0.3)
 
-    # Azimuth angle
-    axes[1, 1].plot(s, theta, 'g-', linewidth=2)
-    axes[1, 1].set_xlabel('Arc Length s [m]')
-    axes[1, 1].set_ylabel('Azimuth θ [deg]')
-    axes[1, 1].set_title('Azimuth Angle')
-    axes[1, 1].grid(True, alpha=0.3)
+    # Side view (X-Z)
+    ax_xz = fig.add_subplot(224)
+    ax_xz.plot(pos[:, 0], pos[:, 2], 'b-', linewidth=2)
+    ax_xz.plot(pos[0, 0], pos[0, 2], 'r*', markersize=15, label='Tow Point (0,0,0)')
+    ax_xz.plot(pos[-1, 0], pos[-1, 2], 'gv', markersize=10, label='Tail')
+    ax_xz.set_xlabel('X [m] (Forward)')
+    ax_xz.set_ylabel('Depth Z [m] (+ downward)')
+    ax_xz.set_title('Side View (X-Z)')
+    ax_xz.invert_yaxis()  # Depth increases downward visually
+    ax_xz.legend(fontsize=8)
+    ax_xz.grid(True, alpha=0.3)
 
     fig.suptitle(title, fontsize=14)
     plt.tight_layout()

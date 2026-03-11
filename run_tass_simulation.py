@@ -59,13 +59,12 @@ def scenario_quasi_static():
 
     tow_speed = 5.0  # m/s (~10 knots)
     tow_velocity = np.array([tow_speed, 0.0, 0.0])
-    tow_depth = 50.0
 
     print(f"  Tow speed: {tow_speed} m/s ({tow_speed * 1.944:.1f} knots)")
     print(f"  Cable length: {cable.length} m")
-    print(f"  Tow depth: {tow_depth} m")
+    print(f"  Tow point: (0, 0, 0), Z+ = depth downward")
 
-    qs_result = model.solve_quasi_static(tow_velocity, depth=tow_depth)
+    qs_result = model.solve_quasi_static(tow_velocity, depth=0.0)
 
     print(f"\n  Results:")
     print(f"    Tow point tension: {qs_result['tensions'][0]:.1f} N")
@@ -94,9 +93,9 @@ def scenario_straight_tow():
     )
 
     sim = TASSSimulation(cable, env, n_elements=50, dt=0.02)
-    trajectory = TowShipTrajectory(speed=5.0, depth=10.0)
+    trajectory = TowShipTrajectory(speed=5.0, depth=0.0)
     sim.set_trajectory(trajectory)
-    sim.initialize_steady_state(np.array([5.0, 0.0, 0.0]), depth=10.0)
+    sim.initialize_steady_state(np.array([5.0, 0.0, 0.0]))
 
     results = sim.run(t_end=60.0, save_interval=10, maneuver='straight')
 
@@ -129,9 +128,9 @@ def scenario_turning():
     )
 
     sim = TASSSimulation(cable, env, n_elements=50, dt=0.02)
-    trajectory = TowShipTrajectory(speed=5.0, depth=10.0)
+    trajectory = TowShipTrajectory(speed=5.0, depth=0.0)
     sim.set_trajectory(trajectory)
-    sim.initialize_steady_state(np.array([5.0, 0.0, 0.0]), depth=10.0)
+    sim.initialize_steady_state(np.array([5.0, 0.0, 0.0]))
 
     turn_radius = 500.0
     print(f"  Turn radius: {turn_radius} m")
@@ -165,9 +164,9 @@ def scenario_s_turn():
     )
 
     sim = TASSSimulation(cable, env, n_elements=50, dt=0.02)
-    trajectory = TowShipTrajectory(speed=5.0, depth=10.0)
+    trajectory = TowShipTrajectory(speed=5.0, depth=0.0)
     sim.set_trajectory(trajectory)
-    sim.initialize_steady_state(np.array([5.0, 0.0, 0.0]), depth=10.0)
+    sim.initialize_steady_state(np.array([5.0, 0.0, 0.0]))
 
     turn_radius = 400.0
     turn_duration = 50.0

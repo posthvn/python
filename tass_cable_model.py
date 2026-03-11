@@ -460,6 +460,13 @@ class TASSCableModel:
 
         # Reverse so index 0 = tow point
         positions = np.column_stack([x[::-1], y[::-1], z[::-1]])
+
+        # Shift so tow point is at origin (0,0,0)
+        tow_pt = positions[0].copy()
+        positions -= tow_pt
+        # Negate Z so that Z+ = depth (downward from tow point)
+        positions[:, 2] = -positions[:, 2]
+
         self.positions = positions
 
         return {
@@ -482,10 +489,10 @@ class TowShipTrajectory:
     """
 
     def __init__(self, speed: float = 5.0, heading_init: float = 0.0,
-                 depth: float = 10.0):
+                 depth: float = 0.0):
         self.speed = speed
         self.heading = heading_init
-        self.depth = depth
+        self.depth = depth  # Z=0 means tow point at origin
         self.position = np.array([0.0, 0.0, depth])
 
     def straight_line(self, t: float) -> Tuple[np.ndarray, np.ndarray]:
@@ -604,19 +611,19 @@ class TASSSimulation:
         self.trajectory = trajectory
 
     def initialize_steady_state(self, tow_velocity: np.ndarray,
-                                 depth: float = 50.0):
+                                 depth: float = 0.0):
         """
         Initialize the dynamic model with a straight-line configuration
         behind the tow point at t=0.
 
-        The cable is placed along the tow direction with a slight
-        catenary droop, matching the initial tow point from the trajectory.
+        Tow point starts at origin (0,0,0). Cable extends in -X direction
+        and +Z direction (deeper). Z+ = depth (downward).
         """
         tow_pos_0, tow_vel_0 = self.trajectory.straight_line(0.0)
         speed = np.linalg.norm(tow_velocity[:2])
         ds = self.model.ds
 
-        # Compute catenary angle
+        # Compute catenary angle from drag/weight balance
         f_t = 0.5 * self.env.rho_water * self.cable_props.Cd_t * np.pi * \
               self.cable_props.diameter * speed ** 2
         w = self.model.submerged_weight
@@ -626,14 +633,14 @@ class TASSSimulation:
         else:
             cat_angle = np.radians(2)
 
-        # Place nodes behind the tow point
+        # Place nodes behind the tow point (tow point at origin)
         direction = tow_velocity / max(np.linalg.norm(tow_velocity), 1e-10)
         for i in range(self.model.n_nodes):
             s = i * ds
             self.model.positions[i] = tow_pos_0.copy()
             self.model.positions[i, 0] -= s * np.cos(cat_angle) * direction[0]
             self.model.positions[i, 1] -= s * np.cos(cat_angle) * direction[1]
-            self.model.positions[i, 2] += s * np.sin(cat_angle)
+            self.model.positions[i, 2] += s * np.sin(cat_angle)  # +Z = deeper
             self.model.velocities[i] = tow_vel_0.copy()
 
         # Also run quasi-static for reference
