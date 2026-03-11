@@ -179,9 +179,11 @@ def plot_tension_distribution(results: dict, time_indices: Optional[list] = None
 
     tensions = results['tensions']
     times = results['time']
-    cable = results['cable_props']
+    total_length = results.get('total_length', results.get('cable_props', None))
+    if hasattr(total_length, 'length'):
+        total_length = total_length.length
     n_nodes = len(tensions[0])
-    s = np.linspace(0, cable.length, n_nodes)
+    s = np.linspace(0, total_length, n_nodes)
 
     if time_indices is None:
         n_frames = min(8, len(tensions))
@@ -220,7 +222,9 @@ def plot_tension_time_history(results: dict,
 
     tensions = results['tensions']
     times = results['time']
-    cable = results['cable_props']
+    total_length = results.get('total_length', results.get('cable_props', None))
+    if hasattr(total_length, 'length'):
+        total_length = total_length.length
     n_nodes = len(tensions[0])
 
     if node_indices is None:
@@ -229,7 +233,7 @@ def plot_tension_time_history(results: dict,
 
     for ni in node_indices:
         T_history = [tensions[i][ni] for i in range(len(tensions))]
-        s_pos = ni * cable.length / (n_nodes - 1)
+        s_pos = ni * total_length / (n_nodes - 1)
         ax.plot(times, T_history, linewidth=1.5,
                 label=f's = {s_pos:.0f} m')
 
