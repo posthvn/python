@@ -1,0 +1,25 @@
+{
+  "scenario": {
+    "total_time": 600.0,
+    "dt": 0.05,
+    "initial_speed": 5.0,
+    "initial_depth": 50.0,
+    "target_depth": 100.0,
+    "target_heading": 0.0,
+    "heading_change_time": 200.0,
+    "heading_change_deg": 30.0
+  },
+  "final_state": {
+    "x_north_m": 2732.65,
+    "y_east_m": 910.77,
+    "depth_m": 102.0,
+    "roll_deg": 0.029,
+    "pitch_deg": 0.37,
+    "heading_deg": 30.403,
+    "u_ms": 4.993,
+    "v_ms": -0.0114,
+    "w_ms": 0.0641
+  },
+  "depth_error_m": 1.996,
+  "heading_error_deg": 0.403
+}
