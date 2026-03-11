@@ -9,7 +9,7 @@ This module implements both quasi-static and dynamic lumped-parameter models
 for 3D towed cable/array motion analysis.
 
 Supports multi-section cables (HWC, LWC, AM, TR) with different
-physical properties per section.
+physical properties and element lengths per section.
 
 Coordinate System:
   - X: forward (tow direction)
@@ -37,21 +37,7 @@ class CableSection:
     added_mass_coeff: float = 1.0   # Added mass coefficient (Ca)
     damping_coeff: float = 100.0    # Structural damping [N·s/m]
     buoyancy_type: str = "negative" # "negative", "neutral", "positive"
-
-
-# Keep CableProperties for backward compatibility (single-section)
-@dataclass
-class CableProperties:
-    """Physical properties of the towed cable/array (single section)."""
-    length: float = 1000.0
-    diameter: float = 0.05
-    mass_per_length: float = 2.0
-    EA: float = 2.0e4
-    EI: float = 0.0
-    Cd_n: float = 1.2
-    Cd_t: float = 0.02
-    added_mass_coeff: float = 1.0
-    damping_coeff: float = 100.0
+    ds: float = 0.0                 # Element length [m] (0 = auto)
 
 
 @dataclass
@@ -75,6 +61,8 @@ class MultiSectionCable:
       - TR  (Tail Rope):          neutrally buoyant, drogue/stabilizer
 
     Order: Tow point → HWC → LWC → AM → TR (free end)
+
+    Each section can have its own element length (ds) for FDM discretization.
     """
 
     def __init__(self, sections: List[CableSection], env: EnvironmentProperties):
@@ -88,69 +76,86 @@ class MultiSectionCable:
             area = np.pi * (s.diameter / 2) ** 2
             if s.buoyancy_type == "neutral":
                 w = 0.0
-            elif s.buoyancy_type == "positive":
-                w = (s.mass_per_length - env.rho_water * area) * env.gravity
-                # For positive buoyancy, mass_per_length should be < rho*A
-            else:  # negative
+            else:
                 w = (s.mass_per_length - env.rho_water * area) * env.gravity
             self.section_weights.append(w)
 
-    def get_section_at_arc_length(self, s_from_tow: float) -> Tuple[int, CableSection, float]:
-        """
-        Get the section and local position for a given arc length from tow point.
+        # Compute element layout per section
+        self._compute_element_layout()
 
-        Args:
-            s_from_tow: arc length measured from tow point [m]
+    def _compute_element_layout(self):
+        """Compute the element layout: per-section n_elements and ds."""
+        self.section_n_elements = []
+        self.section_ds = []
 
-        Returns:
-            (section_index, section, submerged_weight)
-        """
-        cumulative = 0.0
-        for i, sec in enumerate(self.sections):
-            if s_from_tow <= cumulative + sec.length + 1e-10:
-                return i, sec, self.section_weights[i]
-            cumulative += sec.length
-        # Past the end — return last section
-        return len(self.sections) - 1, self.sections[-1], self.section_weights[-1]
+        for sec in self.sections:
+            if sec.ds > 0:
+                n = max(1, round(sec.length / sec.ds))
+            else:
+                # Auto: default ~10m elements
+                n = max(1, round(sec.length / 10.0))
+            ds_actual = sec.length / n
+            self.section_n_elements.append(n)
+            self.section_ds.append(ds_actual)
 
-    def get_element_properties(self, n_elements: int) -> dict:
+        self.n_elements_total = sum(self.section_n_elements)
+        self.n_nodes_total = self.n_elements_total + 1
+
+    def get_element_properties(self) -> dict:
         """
         Compute per-element properties for the discretized cable.
-
-        Args:
-            n_elements: total number of elements
+        Each section uses its own element length.
 
         Returns:
-            dict with arrays of per-element properties
+            dict with per-element arrays and section boundary info
         """
-        ds = self.total_length / n_elements
-        n_nodes = n_elements + 1
+        N = self.n_elements_total
 
         # Per-element arrays
-        diameter = np.zeros(n_elements)
-        mass_per_length = np.zeros(n_elements)
-        EA = np.zeros(n_elements)
-        Cd_n = np.zeros(n_elements)
-        Cd_t = np.zeros(n_elements)
-        added_mass = np.zeros(n_elements)
-        damping = np.zeros(n_elements)
-        submerged_weight = np.zeros(n_elements)
-        section_id = np.zeros(n_elements, dtype=int)
+        ds_array = np.zeros(N)
+        diameter = np.zeros(N)
+        mass_per_length = np.zeros(N)
+        EA = np.zeros(N)
+        Cd_n = np.zeros(N)
+        Cd_t = np.zeros(N)
+        added_mass = np.zeros(N)
+        damping = np.zeros(N)
+        submerged_weight = np.zeros(N)
+        section_id = np.zeros(N, dtype=int)
 
-        for i in range(n_elements):
-            s_mid = (i + 0.5) * ds  # Arc length at element midpoint
-            idx, sec, w = self.get_section_at_arc_length(s_mid)
-            section_id[i] = idx
-            diameter[i] = sec.diameter
-            mass_per_length[i] = sec.mass_per_length
-            EA[i] = sec.EA
-            Cd_n[i] = sec.Cd_n
-            Cd_t[i] = sec.Cd_t
-            added_mass[i] = self.env.rho_water * np.pi * (sec.diameter / 2) ** 2 * sec.added_mass_coeff
-            damping[i] = sec.damping_coeff
-            submerged_weight[i] = w
+        # Fill per-element properties section by section
+        elem_offset = 0
+        section_boundaries = [0]  # Node indices where sections start
+
+        for sec_idx, sec in enumerate(self.sections):
+            n_elem = self.section_n_elements[sec_idx]
+            ds_sec = self.section_ds[sec_idx]
+            w = self.section_weights[sec_idx]
+            area = np.pi * (sec.diameter / 2) ** 2
+
+            for j in range(n_elem):
+                i = elem_offset + j
+                ds_array[i] = ds_sec
+                diameter[i] = sec.diameter
+                mass_per_length[i] = sec.mass_per_length
+                EA[i] = sec.EA
+                Cd_n[i] = sec.Cd_n
+                Cd_t[i] = sec.Cd_t
+                added_mass[i] = self.env.rho_water * area * sec.added_mass_coeff
+                damping[i] = sec.damping_coeff
+                submerged_weight[i] = w
+                section_id[i] = sec_idx
+
+            elem_offset += n_elem
+            section_boundaries.append(elem_offset)  # Node index
+
+        # Node arc-length positions (cumulative ds from tow point)
+        node_s = np.zeros(self.n_nodes_total)
+        for i in range(N):
+            node_s[i + 1] = node_s[i] + ds_array[i]
 
         return {
+            'ds': ds_array,
             'diameter': diameter,
             'mass_per_length': mass_per_length,
             'EA': EA,
@@ -160,7 +165,8 @@ class MultiSectionCable:
             'damping': damping,
             'submerged_weight': submerged_weight,
             'section_id': section_id,
-            'ds': ds,
+            'section_boundaries': section_boundaries,
+            'node_s': node_s,
         }
 
 
@@ -168,8 +174,8 @@ class TASSCableModel:
     """
     3D TASS Cable Dynamics Model with multi-section support.
 
-    Implements Sanders (1982) lumped-parameter approach for 3D cable dynamics.
-    Supports varying physical properties along the cable length.
+    Each element can have a different length (ds), diameter, mass,
+    drag coefficients, and submerged weight.
 
     Governing equations (Sanders, 1982):
       Tangential:  dT/ds = f_t - w·sin(φ)
@@ -177,41 +183,13 @@ class TASSCableModel:
       Normal (H):  T·cos(φ)·dθ/ds = f_n,h
     """
 
-    def __init__(self, cable, env: EnvironmentProperties,
-                 n_elements: int = 100):
+    def __init__(self, cable: MultiSectionCable, env: EnvironmentProperties):
         self.env = env
-        self.n_elements = n_elements
-        self.n_nodes = n_elements + 1
-
-        # Handle both single-section (CableProperties) and multi-section
-        if isinstance(cable, MultiSectionCable):
-            self.multi_cable = cable
-            self.total_length = cable.total_length
-            self.ds = cable.total_length / n_elements
-            self.elem_props = cable.get_element_properties(n_elements)
-        else:
-            # Legacy single-section
-            self.multi_cable = None
-            self.total_length = cable.length
-            self.ds = cable.length / n_elements
-            area = np.pi * (cable.diameter / 2) ** 2
-            w = (cable.mass_per_length - env.rho_water * area) * env.gravity
-            self.elem_props = {
-                'diameter': np.full(n_elements, cable.diameter),
-                'mass_per_length': np.full(n_elements, cable.mass_per_length),
-                'EA': np.full(n_elements, cable.EA),
-                'Cd_n': np.full(n_elements, cable.Cd_n),
-                'Cd_t': np.full(n_elements, cable.Cd_t),
-                'added_mass': np.full(n_elements,
-                    env.rho_water * area * cable.added_mass_coeff),
-                'damping': np.full(n_elements, cable.damping_coeff),
-                'submerged_weight': np.full(n_elements, w),
-                'section_id': np.zeros(n_elements, dtype=int),
-                'ds': self.ds,
-            }
-
-        # Keep reference for backward compatibility
         self.cable = cable
+        self.total_length = cable.total_length
+        self.elem_props = cable.get_element_properties()
+        self.n_elements = cable.n_elements_total
+        self.n_nodes = cable.n_nodes_total
 
         # State arrays
         self.positions = np.zeros((self.n_nodes, 3))
@@ -220,6 +198,7 @@ class TASSCableModel:
 
     def compute_element_vectors(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Compute element tangent vectors, lengths, and strains."""
+        ds = self.elem_props['ds']
         t_hat = np.zeros((self.n_elements, 3))
         seg_lengths = np.zeros(self.n_elements)
         strains = np.zeros(self.n_elements)
@@ -232,18 +211,17 @@ class TASSCableModel:
                 t_hat[i] = np.array([1.0, 0.0, 0.0])
             else:
                 t_hat[i] = seg / seg_len
-            strains[i] = (seg_len - self.ds) / self.ds
+            strains[i] = (seg_len - ds[i]) / ds[i]
 
         return t_hat, seg_lengths, strains
 
     def compute_forces(self, tow_point_vel: np.ndarray,
                         fluid_velocities: Optional[np.ndarray] = None
                         ) -> np.ndarray:
-        """
-        Compute total forces at each node using per-element properties.
-        """
+        """Compute total forces at each node using per-element properties."""
         rho = self.env.rho_water
         ep = self.elem_props
+        ds = ep['ds']
 
         t_hat, seg_lengths, strains = self.compute_element_vectors()
 
@@ -254,7 +232,7 @@ class TASSCableModel:
 
         forces = np.zeros((self.n_nodes, 3))
 
-        # --- Tension forces (per-element EA) ---
+        # --- Tension forces (per-element EA and ds) ---
         for i in range(self.n_elements):
             tension = ep['EA'][i] * max(strains[i], 0.0)
             self.tensions[i] = tension
@@ -267,7 +245,7 @@ class TASSCableModel:
             forces[i] += force
             forces[i + 1] -= force
 
-        # --- Hydrodynamic drag forces (per-element Cd, diameter) ---
+        # --- Hydrodynamic drag forces (per-element Cd, diameter, ds) ---
         for i in range(self.n_elements):
             d = ep['diameter'][i]
             Cd_n = ep['Cd_n'][i]
@@ -283,18 +261,17 @@ class TASSCableModel:
             v_t_mag = abs(v_t_scalar)
             v_n_mag = np.linalg.norm(v_n)
 
-            f_tang = 0.5 * rho * Cd_t * np.pi * d * v_t_mag * v_t * self.ds
-            f_norm = 0.5 * rho * Cd_n * d * v_n_mag * v_n * self.ds
+            f_tang = 0.5 * rho * Cd_t * np.pi * d * v_t_mag * v_t * ds[i]
+            f_norm = 0.5 * rho * Cd_n * d * v_n_mag * v_n * ds[i]
 
             f_element = f_tang + f_norm
             forces[i] += 0.5 * f_element
             forces[i + 1] += 0.5 * f_element
 
-        # --- Gravity and buoyancy (per-element submerged weight) ---
+        # --- Gravity and buoyancy (per-element submerged weight and ds) ---
         for i in range(self.n_elements):
-            w = ep['submerged_weight'][i] * self.ds
-            # Distribute to adjacent nodes
-            forces[i, 2] += 0.5 * w      # Z+ = depth (downward)
+            w = ep['submerged_weight'][i] * ds[i]
+            forces[i, 2] += 0.5 * w
             forces[i + 1, 2] += 0.5 * w
 
         return forces
@@ -309,17 +286,17 @@ class TASSCableModel:
 
         f_total = self.compute_forces(tow_point_vel, fluid_velocities)
         ep = self.elem_props
+        ds = ep['ds']
 
         accelerations = np.zeros((self.n_nodes, 3))
         for i in range(1, self.n_nodes):
             # Mass from adjacent elements
             if i < self.n_elements:
-                m1 = (ep['mass_per_length'][i - 1] + ep['added_mass'][i - 1]) * self.ds * 0.5
-                m2 = (ep['mass_per_length'][i] + ep['added_mass'][i]) * self.ds * 0.5
+                m1 = (ep['mass_per_length'][i - 1] + ep['added_mass'][i - 1]) * ds[i - 1] * 0.5
+                m2 = (ep['mass_per_length'][i] + ep['added_mass'][i]) * ds[i] * 0.5
                 m_total = m1 + m2
             else:
-                # Last node — only one element contributes
-                m_total = (ep['mass_per_length'][-1] + ep['added_mass'][-1]) * self.ds * 0.5
+                m_total = (ep['mass_per_length'][-1] + ep['added_mass'][-1]) * ds[-1] * 0.5
             accelerations[i] = f_total[i] / max(m_total, 1e-6)
 
         return accelerations
@@ -331,12 +308,10 @@ class TASSCableModel:
         pos_save = self.positions.copy()
         vel_save = self.velocities.copy()
 
-        # k1
         a1 = self.compute_accelerations(tow_point_pos, tow_point_vel, fluid_velocities)
         k1_v = a1 * dt
         k1_x = self.velocities * dt
 
-        # k2
         self.positions = pos_save + 0.5 * k1_x
         self.velocities = vel_save + 0.5 * k1_v
         self.positions[0] = tow_point_pos
@@ -345,7 +320,6 @@ class TASSCableModel:
         k2_v = a2 * dt
         k2_x = self.velocities * dt
 
-        # k3
         self.positions = pos_save + 0.5 * k2_x
         self.velocities = vel_save + 0.5 * k2_v
         self.positions[0] = tow_point_pos
@@ -354,7 +328,6 @@ class TASSCableModel:
         k3_v = a3 * dt
         k3_x = self.velocities * dt
 
-        # k4
         self.positions = pos_save + k3_x
         self.velocities = vel_save + k3_v
         self.positions[0] = tow_point_pos
@@ -374,16 +347,18 @@ class TASSCableModel:
         """
         Quasi-static steady-state solution (Sanders 1982).
 
-        Supports multi-section cables with varying w(s), Cd(s), d(s).
-        Integration from free end (tail) to tow point.
+        Supports multi-section cables with varying w(s), Cd(s), d(s), ds(s).
+        Integration from free end (tail) to tow point using per-element ds.
         """
         V = np.linalg.norm(tow_velocity[:2])
         rho = self.env.rho_water
-        L = self.total_length
         N = self.n_nodes
         ep = self.elem_props
+        ds_arr = ep['ds']
 
-        s = np.linspace(0, L, N)
+        # Node arc-length from tow point
+        node_s = ep['node_s']
+
         T = np.zeros(N)
         phi = np.zeros(N)
         theta = np.zeros(N)
@@ -391,13 +366,7 @@ class TASSCableModel:
         y = np.zeros(N)
         z = np.zeros(N)
 
-        # Integration from free end (index 0) to tow point (index N-1).
-        # Element index for node i: the "current element" as we integrate
-        # from free end. Node i sits between element (N-2-i) from tow and
-        # element i from free end. We use i for the free-end-based index.
-
-        # Initial conditions at free end
-        # Use the last section's (tail rope) properties
+        # Initial conditions at free end (node index 0 in integration = last element)
         d_tail = ep['diameter'][-1]
         Cd_t_tail = ep['Cd_t'][-1]
         w_tail = ep['submerged_weight'][-1]
@@ -411,25 +380,22 @@ class TASSCableModel:
             if w_tail < 0:
                 phi[0] = -phi[0]
         else:
-            phi[0] = np.radians(1)  # Nearly horizontal for neutral buoyancy
+            phi[0] = np.radians(1)
 
         theta[0] = np.arctan2(tow_velocity[1], tow_velocity[0]) if V > 0.1 else 0.0
         x[0] = 0.0
         y[0] = 0.0
         z[0] = depth
 
-        ds_step = L / (N - 1)
-
+        # Integrate from free end (i=0) to tow point (i=N-1).
+        # Integration step i uses element (n_elements - 1 - i) properties.
         for i in range(N - 1):
-            # Map free-end node index i to element index (from tow)
-            # Element index from free end = i, from tow = n_elements - 1 - i
-            elem_idx = min(self.n_elements - 1 - i, self.n_elements - 1)
-            elem_idx = max(elem_idx, 0)
+            elem_idx = max(0, min(self.n_elements - 1 - i, self.n_elements - 1))
 
             d_i = ep['diameter'][elem_idx]
             Cd_t_i = ep['Cd_t'][elem_idx]
-            Cd_n_i = ep['Cd_n'][elem_idx]
             w_i = ep['submerged_weight'][elem_idx]
+            ds_step = ds_arr[elem_idx]
 
             f_t_i = 0.5 * rho * Cd_t_i * np.pi * d_i * V ** 2
 
@@ -444,6 +410,7 @@ class TASSCableModel:
                 dtheta_ds = 0.0
                 return dT_ds, dphi_ds, dtheta_ds
 
+            # RK4 integration with this element's ds
             k1_T, k1_p, k1_t = qs_rhs(T_i, phi_i, theta_i)
             k2_T, k2_p, k2_t = qs_rhs(
                 T_i + 0.5 * ds_step * k1_T,
@@ -488,7 +455,7 @@ class TASSCableModel:
             'tensions': T[::-1],
             'phi': phi[::-1],
             'theta': theta[::-1],
-            'arc_length': s
+            'arc_length': node_s,
         }
 
 
@@ -503,7 +470,6 @@ class TowShipTrajectory:
         self.speed = speed
         self.heading = heading_init
         self.depth = depth
-        self.position = np.array([0.0, 0.0, depth])
 
     def straight_line(self, t: float) -> Tuple[np.ndarray, np.ndarray]:
         pos = np.array([self.speed * t, 0.0, self.depth])
@@ -588,16 +554,15 @@ class TowShipTrajectory:
 class TASSSimulation:
     """
     Main simulation driver for 3D TASS motion analysis.
-    Supports multi-section cable models.
+    Supports multi-section cable models with per-section element lengths.
     """
 
-    def __init__(self, cable, env: EnvironmentProperties,
-                 n_elements: int = 100, dt: float = 0.1):
+    def __init__(self, cable: MultiSectionCable, env: EnvironmentProperties,
+                 dt: float = 0.1):
         self.cable = cable
         self.env = env
-        self.n_elements = n_elements
         self.dt = dt
-        self.model = TASSCableModel(cable, env, n_elements)
+        self.model = TASSCableModel(cable, env)
         self.trajectory = TowShipTrajectory()
         self.time = 0.0
 
@@ -617,12 +582,11 @@ class TASSSimulation:
         """
         tow_pos_0, tow_vel_0 = self.trajectory.straight_line(0.0)
         speed = np.linalg.norm(tow_velocity[:2])
-        ds = self.model.ds
         ep = self.model.elem_props
+        ds = ep['ds']
 
         direction = tow_velocity / max(np.linalg.norm(tow_velocity), 1e-10)
 
-        # Place nodes with section-dependent catenary angle
         cum_x = 0.0
         cum_z = 0.0
         self.model.positions[0] = tow_pos_0.copy()
@@ -638,19 +602,19 @@ class TASSSimulation:
                 cat_angle = np.arctan2(abs(w_i), f_t)
                 cat_angle = min(cat_angle, np.radians(20))
             else:
-                cat_angle = np.radians(0.5)  # Nearly horizontal for neutral
+                cat_angle = np.radians(0.5)
 
-            cum_x += ds * np.cos(cat_angle)
-            cum_z += ds * np.sin(cat_angle)
+            cum_x += ds[i] * np.cos(cat_angle)
+            cum_z += ds[i] * np.sin(cat_angle)
 
             self.model.positions[i + 1] = tow_pos_0.copy()
             self.model.positions[i + 1, 0] -= cum_x * direction[0]
             self.model.positions[i + 1, 1] -= cum_x * direction[1]
-            self.model.positions[i + 1, 2] += cum_z  # +Z = deeper
+            self.model.positions[i + 1, 2] += cum_z
             self.model.velocities[i + 1] = tow_vel_0.copy()
 
         # Quasi-static for reference
-        qs_model = TASSCableModel(self.cable, self.env, self.n_elements)
+        qs_model = TASSCableModel(self.cable, self.env)
         result = qs_model.solve_quasi_static(tow_velocity, depth)
         return result
 
@@ -678,9 +642,9 @@ class TASSSimulation:
             raise ValueError(f"Unknown maneuver type: {maneuver}")
 
         total_length = self.model.total_length
+        n_elem = self.model.n_elements
         print(f"Running TASS simulation: {maneuver} maneuver")
-        print(f"  Total cable length: {total_length} m")
-        print(f"  Elements: {self.n_elements}")
+        print(f"  Total cable length: {total_length} m, Elements: {n_elem}")
         print(f"  Time step: {self.dt} s, Duration: {t_end} s, Steps: {n_steps}")
 
         for step in range(n_steps):

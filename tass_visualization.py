@@ -179,11 +179,18 @@ def plot_tension_distribution(results: dict, time_indices: Optional[list] = None
 
     tensions = results['tensions']
     times = results['time']
-    total_length = results.get('total_length', results.get('cable_props', None))
-    if hasattr(total_length, 'length'):
-        total_length = total_length.length
-    n_nodes = len(tensions[0])
-    s = np.linspace(0, total_length, n_nodes)
+    n_elem = len(tensions[0])
+
+    # Build arc-length array at element midpoints
+    ep = results.get('elem_props')
+    if ep is not None and 'node_s' in ep:
+        node_s = ep['node_s']
+        s = 0.5 * (node_s[:n_elem] + node_s[1:n_elem + 1])
+    else:
+        total_length = results.get('total_length', 1.0)
+        if hasattr(total_length, 'length'):
+            total_length = total_length.length
+        s = np.linspace(0, total_length, n_elem)
 
     if time_indices is None:
         n_frames = min(8, len(tensions))
@@ -222,18 +229,26 @@ def plot_tension_time_history(results: dict,
 
     tensions = results['tensions']
     times = results['time']
-    total_length = results.get('total_length', results.get('cable_props', None))
-    if hasattr(total_length, 'length'):
-        total_length = total_length.length
-    n_nodes = len(tensions[0])
+    n_elem = len(tensions[0])
+
+    # Build arc-length at element midpoints
+    ep = results.get('elem_props')
+    if ep is not None and 'node_s' in ep:
+        node_s = ep['node_s']
+        s_mid = 0.5 * (node_s[:n_elem] + node_s[1:n_elem + 1])
+    else:
+        total_length = results.get('total_length', 1.0)
+        if hasattr(total_length, 'length'):
+            total_length = total_length.length
+        s_mid = np.linspace(0, total_length, n_elem)
 
     if node_indices is None:
-        node_indices = [0, n_nodes // 4, n_nodes // 2,
-                        3 * n_nodes // 4, n_nodes - 1]
+        node_indices = [0, n_elem // 4, n_elem // 2,
+                        3 * n_elem // 4, n_elem - 1]
 
     for ni in node_indices:
         T_history = [tensions[i][ni] for i in range(len(tensions))]
-        s_pos = ni * total_length / (n_nodes - 1)
+        s_pos = s_mid[ni]
         ax.plot(times, T_history, linewidth=1.5,
                 label=f's = {s_pos:.0f} m')
 

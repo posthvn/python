@@ -5,12 +5,11 @@ TASS 3D Motion Analysis - Multi-Section Simulation
 
 Based on Sanders, J.V. (1982) "A three-dimensional dynamic analysis of a towed system."
 
-TASS configuration:
-  Tow Point → HWC (1000m) → LWC (300m) → AM (100m) → TR (80m)
-               negative       neutral      neutral     neutral
-               buoyancy       buoyancy     buoyancy    buoyancy
+TASS configuration (with per-section FDM element lengths):
+  Tow Point → HWC (1000m, ds=100m) → LWC (300m, ds=50m) → AM (100m, ds=20m) → TR (80m, ds=20m)
 
 Total length: 1480 m
+Total elements: 10 + 6 + 5 + 4 = 25
 
 Usage:
   python run_tass_simulation.py
@@ -32,68 +31,68 @@ from tass_visualization import (
 
 def make_tass_cable(env: EnvironmentProperties) -> MultiSectionCable:
     """
-    Create standard 4-section TASS cable.
+    Create standard 4-section TASS cable with per-section element lengths.
 
     Sections (from tow point to tail):
-      1. HWC (Heavy Weight Cable): 1000m, negatively buoyant
-      2. LWC (Light Weight Cable):  300m, neutrally buoyant
-      3. AM  (Acoustic Module):     100m, neutrally buoyant
-      4. TR  (Tail Rope):            80m, neutrally buoyant
+      1. HWC: 1000m, ds=100m → 10 elements, negatively buoyant
+      2. LWC:  300m, ds= 50m →  6 elements, neutrally buoyant
+      3. AM:   100m, ds= 20m →  5 elements, neutrally buoyant
+      4. TR:    80m, ds= 20m →  4 elements, neutrally buoyant
     """
-    # HWC: Steel-armored cable, negatively buoyant
     hwc = CableSection(
         name="HWC",
         length=1000.0,
-        diameter=0.035,         # 35 mm
-        mass_per_length=2.8,    # Heavy (~2.8 kg/m in air)
+        diameter=0.035,
+        mass_per_length=2.8,
         EA=3.0e4,
         Cd_n=1.2,
         Cd_t=0.025,
         added_mass_coeff=1.0,
         damping_coeff=120.0,
         buoyancy_type="negative",
+        ds=100.0,               # 1000m / 100m = 10 elements
     )
 
-    # LWC: Lightweight cable, neutrally buoyant
     lwc = CableSection(
         name="LWC",
         length=300.0,
-        diameter=0.045,         # 45 mm
-        mass_per_length=1.63,   # Adjusted for neutral buoyancy
+        diameter=0.045,
+        mass_per_length=1.63,
         EA=2.0e4,
         Cd_n=1.2,
         Cd_t=0.020,
         added_mass_coeff=1.0,
         damping_coeff=80.0,
         buoyancy_type="neutral",
+        ds=50.0,                # 300m / 50m = 6 elements
     )
 
-    # AM: Acoustic module (hydrophone array), neutrally buoyant
     am = CableSection(
         name="AM",
         length=100.0,
-        diameter=0.070,         # 70 mm (larger, contains hydrophones)
-        mass_per_length=3.95,   # Adjusted for neutral buoyancy
+        diameter=0.070,
+        mass_per_length=3.95,
         EA=1.5e4,
         Cd_n=1.0,
         Cd_t=0.015,
         added_mass_coeff=1.0,
         damping_coeff=60.0,
         buoyancy_type="neutral",
+        ds=20.0,                # 100m / 20m = 5 elements
     )
 
-    # TR: Tail rope (drogue), neutrally buoyant
     tr = CableSection(
         name="TR",
         length=80.0,
-        diameter=0.030,         # 30 mm
-        mass_per_length=0.72,   # Adjusted for neutral buoyancy
+        diameter=0.030,
+        mass_per_length=0.72,
         EA=1.0e4,
         Cd_n=1.2,
         Cd_t=0.020,
         added_mass_coeff=1.0,
         damping_coeff=50.0,
         buoyancy_type="neutral",
+        ds=20.0,                # 80m / 20m = 4 elements
     )
 
     return MultiSectionCable([hwc, lwc, am, tr], env)
@@ -101,21 +100,26 @@ def make_tass_cable(env: EnvironmentProperties) -> MultiSectionCable:
 
 def print_tass_config(cable: MultiSectionCable):
     """Print TASS cable configuration summary."""
-    print("\n  TASS Cable Configuration:")
-    print("  " + "-" * 60)
-    print(f"  {'Section':<8} {'Length':>8} {'Dia':>8} {'Mass':>10} {'Buoyancy':<10} {'w':>10}")
-    print(f"  {'':8} {'[m]':>8} {'[mm]':>8} {'[kg/m]':>10} {'':10} {'[N/m]':>10}")
-    print("  " + "-" * 60)
+    print("\n  TASS Cable Configuration (FDM Discretization):")
+    print("  " + "-" * 72)
+    print(f"  {'Section':<8} {'Length':>8} {'ds':>6} {'Elems':>6} {'Dia':>8} "
+          f"{'Buoyancy':<10} {'w':>10}")
+    print(f"  {'':8} {'[m]':>8} {'[m]':>6} {'':>6} {'[mm]':>8} "
+          f"{'':10} {'[N/m]':>10}")
+    print("  " + "-" * 72)
 
-    cum_len = 0
+    total_elem = 0
     for i, sec in enumerate(cable.sections):
-        cum_len += sec.length
+        n = cable.section_n_elements[i]
+        ds = cable.section_ds[i]
         w = cable.section_weights[i]
-        print(f"  {sec.name:<8} {sec.length:>8.0f} {sec.diameter*1000:>8.1f} "
-              f"{sec.mass_per_length:>10.2f} {sec.buoyancy_type:<10} {w:>10.3f}")
+        total_elem += n
+        print(f"  {sec.name:<8} {sec.length:>8.0f} {ds:>6.0f} {n:>6d} "
+              f"{sec.diameter*1000:>8.1f} {sec.buoyancy_type:<10} {w:>10.3f}")
 
-    print("  " + "-" * 60)
-    print(f"  {'TOTAL':<8} {cable.total_length:>8.0f}")
+    print("  " + "-" * 72)
+    print(f"  {'TOTAL':<8} {cable.total_length:>8.0f} {'':>6} {total_elem:>6d}")
+    print(f"  Nodes: {cable.n_nodes_total}")
     print()
 
 
@@ -125,13 +129,14 @@ def scenario_quasi_static(cable, env):
     print("SCENARIO 1: Quasi-Static Steady-State Analysis")
     print("=" * 70)
 
-    model = TASSCableModel(cable, env, n_elements=300)
+    model = TASSCableModel(cable, env)
 
     tow_speed = 5.0
     tow_velocity = np.array([tow_speed, 0.0, 0.0])
 
     print(f"  Tow speed: {tow_speed} m/s ({tow_speed * 1.944:.1f} knots)")
     print(f"  Total length: {cable.total_length} m")
+    print(f"  Elements: {cable.n_elements_total}, Nodes: {cable.n_nodes_total}")
     print(f"  Tow point: (0, 0, 0), Z+ = depth")
 
     qs_result = model.solve_quasi_static(tow_velocity, depth=0.0)
@@ -143,7 +148,6 @@ def scenario_quasi_static(cable, env):
     print(f"    Max depth: {np.max(pos[:, 2]):.1f} m")
     print(f"    Tail position: X={pos[-1, 0]:.0f}m, Z={pos[-1, 2]:.1f}m")
 
-    # Section boundaries for annotation
     qs_result['cable'] = cable
 
     plot_quasi_static_results(qs_result,
@@ -159,12 +163,12 @@ def scenario_straight_tow(cable, env):
     print("SCENARIO 2: Dynamic Straight-Line Tow")
     print("=" * 70)
 
-    sim = TASSSimulation(cable, env, n_elements=148, dt=0.02)
+    sim = TASSSimulation(cable, env, dt=0.05)
     trajectory = TowShipTrajectory(speed=5.0, depth=0.0)
     sim.set_trajectory(trajectory)
     sim.initialize_steady_state(np.array([5.0, 0.0, 0.0]))
 
-    results = sim.run(t_end=120.0, save_interval=10, maneuver='straight')
+    results = sim.run(t_end=120.0, save_interval=4, maneuver='straight')
 
     plot_cable_3d(results, title="Straight Tow (V=5 m/s, 4-section TASS)",
                   save_path="results/straight_3d.png")
@@ -188,14 +192,14 @@ def scenario_turning(cable, env):
     print("SCENARIO 3: Dynamic Turning Maneuver")
     print("=" * 70)
 
-    sim = TASSSimulation(cable, env, n_elements=148, dt=0.02)
+    sim = TASSSimulation(cable, env, dt=0.05)
     trajectory = TowShipTrajectory(speed=5.0, depth=0.0)
     sim.set_trajectory(trajectory)
     sim.initialize_steady_state(np.array([5.0, 0.0, 0.0]))
 
     turn_radius = 800.0
     print(f"  Turn radius: {turn_radius} m")
-    results = sim.run(t_end=200.0, save_interval=10,
+    results = sim.run(t_end=200.0, save_interval=4,
                       maneuver='turn', turn_radius=turn_radius)
 
     plot_cable_3d(results, title=f"Turning (R={turn_radius}m, 4-section TASS)",
@@ -218,7 +222,7 @@ def scenario_s_turn(cable, env):
     print("SCENARIO 4: S-Turn Maneuver")
     print("=" * 70)
 
-    sim = TASSSimulation(cable, env, n_elements=148, dt=0.02)
+    sim = TASSSimulation(cable, env, dt=0.05)
     trajectory = TowShipTrajectory(speed=5.0, depth=0.0)
     sim.set_trajectory(trajectory)
     sim.initialize_steady_state(np.array([5.0, 0.0, 0.0]))
@@ -227,7 +231,7 @@ def scenario_s_turn(cable, env):
     turn_duration = 60.0
     print(f"  Turn radius: {turn_radius} m, phase duration: {turn_duration} s")
 
-    results = sim.run(t_end=300.0, save_interval=10,
+    results = sim.run(t_end=300.0, save_interval=4,
                       maneuver='s_turn',
                       turn_radius=turn_radius,
                       turn_duration=turn_duration)
@@ -248,7 +252,7 @@ def main():
     os.makedirs("results", exist_ok=True)
 
     print("=" * 70)
-    print("  3D TASS Motion Analysis Code (Multi-Section)")
+    print("  3D TASS Motion Analysis Code (Multi-Section, Variable ds)")
     print("  Based on Sanders, J.V. (1982)")
     print("  'A three-dimensional dynamic analysis of a towed system'")
     print("  Ocean Engineering, Vol. 9, No. 5, pp. 483-499")
